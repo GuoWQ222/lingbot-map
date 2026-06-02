@@ -186,6 +186,7 @@ class GCTBase(nn.Module, PyTorchModelHubMixin, ABC):
         aggregated_tokens_list: list,
         images: torch.Tensor,
         patch_start_idx: int,
+        frames_chunk_size: Optional[int] = None,
         gather_outputs: bool = True,
     ) -> Dict[str, torch.Tensor]:
         if self.depth_head is None:
@@ -198,7 +199,8 @@ class GCTBase(nn.Module, PyTorchModelHubMixin, ABC):
             depth, depth_conf = self.depth_head(
                 aggregated_tokens_list_fp32,
                 images=images_fp32,
-                patch_start_idx=patch_start_idx
+                patch_start_idx=patch_start_idx,
+                frames_chunk_size=frames_chunk_size,
             )
 
         return {"depth": depth, "depth_conf": depth_conf}
@@ -296,6 +298,7 @@ class GCTBase(nn.Module, PyTorchModelHubMixin, ABC):
         ordered_video: Optional[torch.Tensor] = None,
         gather_outputs: bool = True,
         point_masks: Optional[torch.Tensor] = None,
+        depth_frames_chunk_size: Optional[int] = None,
         **kwargs,
     ) -> Dict[str, torch.Tensor]:
         """
@@ -336,6 +339,7 @@ class GCTBase(nn.Module, PyTorchModelHubMixin, ABC):
 
         predictions.update(self._predict_depth(
             aggregated_tokens_list, images, patch_start_idx,
+            frames_chunk_size=depth_frames_chunk_size,
             gather_outputs=gather_outputs,
         ))
 

@@ -15,3 +15,12 @@ skyseg.onnx
 weights/
 .DS_Store
 **/.DS_Store
+runs/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.deb
+eval/
+paper/
+*.docx

@@ -50,6 +50,76 @@ from lingbot_map.utils.load_fn import load_and_preprocess_images
 
 
 # =============================================================================
+# Foreground mask loading
+# =============================================================================
+
+def load_foreground_masks(image_paths, mask_dir, image_size, patch_size, invert=False):
+    """Load binary foreground masks aligned with the preprocessed images.
+
+    Mirrors the resize/center-crop in `load_and_preprocess_images(mode="crop")` so the
+    returned mask is spatially aligned with the model's depth_conf output.
+
+    Returns:
+        np.ndarray of shape (S, H, W) with values in {0.0, 1.0}.
+    """
+    masks = []
+    target_size = image_size
+    for path in image_paths:
+        basename = os.path.basename(path)
+        mask_path = os.path.join(mask_dir, basename)
+        if not os.path.exists(mask_path):
+            stem = os.path.splitext(basename)[0]
+            for ext in (".png", ".jpg", ".jpeg", ".bmp"):
+                alt = os.path.join(mask_dir, stem + ext)
+                if os.path.exists(alt):
+                    mask_path = alt
+                    break
+        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        if mask is None:
+            raise FileNotFoundError(f"Mask not found or unreadable: {mask_path}")
+
+        h, w = mask.shape[:2]
+        new_w = target_size
+        new_h = round(h * (new_w / w) / patch_size) * patch_size
+        mask = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+        if new_h > target_size:
+            start_y = (new_h - target_size) // 2
+            mask = mask[start_y : start_y + target_size, :]
+
+        keep = mask == 0 if invert else mask > 0
+        masks.append(keep.astype(np.float32))
+
+    return np.stack(masks, axis=0)
+
+
+# =============================================================================
+# Pretty printing
+# =============================================================================
+
+_BANNER_WIDTH = 64
+_KEY_WIDTH = 20
+
+
+def _hr(char="=", width=_BANNER_WIDTH):
+    print(char * width)
+
+
+def _banner(title, width=_BANNER_WIDTH):
+    _hr("=", width)
+    print(title.center(width))
+    _hr("=", width)
+
+
+def _section(title):
+    print()
+    print(f"[{title}]")
+
+
+def _kv(key, value, key_width=_KEY_WIDTH):
+    print(f"  {key:<{key_width}}: {value}")
+
+
+# =============================================================================
 # Image loading
 # =============================================================================
 
@@ -100,19 +170,9 @@ def load_images(image_folder=None, video_path=None, fps=10, image_ext=".jpg,.png
     if stride > 1:
         paths = paths[::stride]
 
-    if rotate_clockwise_90:
-        rotated_dir = tempfile.mkdtemp(prefix="lingbot_rot_cw90_")
-        rotated_paths = []
-        # Image.ROTATE_270 = lossless 90° clockwise (270° counter-clockwise) reordering.
-        for p in tqdm(paths, desc="Rotating images 90° CW"):
-            out_path = os.path.join(rotated_dir, os.path.basename(p))
-            Image.open(p).transpose(Image.ROTATE_270).save(out_path)
-            rotated_paths.append(out_path)
-        paths = rotated_paths
-        resolved_folder = rotated_dir
-        print(f"Rotated {len(paths)} images 90° clockwise → {rotated_dir}")
-
-    print(f"Loading {len(paths)} images...")
+    _section("input")
+    _kv("source", image_folder if image_folder else video_path)
+    _kv("num_files", f"{len(paths)} (stride={stride}, first_k={first_k})")
     images = load_and_preprocess_images(
         paths,
         mode="crop",
@@ -120,7 +180,7 @@ def load_images(image_folder=None, video_path=None, fps=10, image_ext=".jpg,.png
         patch_size=patch_size,
     )
     h, w = images.shape[-2:]
-    print(f"Preprocessed images to {w}x{h} using canonical crop mode")
+    _kv("preprocessed", f"{len(paths)} frames, {w}x{h} (canonical crop)")
     return images, paths, resolved_folder
 
 
@@ -135,9 +195,19 @@ def load_model(args, device):
     else:
         from lingbot_map.models.gct_stream import GCTStream
 
-    print("Building model...")
+    _section("model")
+    _kv("class", "GCTStream")
+    _kv("input_image_size", args.image_size)
+    _kv("model_image_size", args.model_image_size)
+    _kv("patch_size", args.patch_size)
+    _kv("num_scale_frames", args.num_scale_frames)
+    _kv("kv_window", args.kv_cache_sliding_window)
+    _kv("max_frame_num", args.max_frame_num)
+    _kv("camera_iters", args.camera_num_iterations)
+    _kv("attn_backend", "SDPA" if args.use_sdpa else "FlashInfer")
+
     model = GCTStream(
-        img_size=args.image_size,
+        img_size=args.model_image_size,
         patch_size=args.patch_size,
         enable_3d_rope=args.enable_3d_rope,
         max_frame_num=args.max_frame_num,
@@ -150,15 +220,17 @@ def load_model(args, device):
     )
 
     if args.model_path:
-        print(f"Loading checkpoint: {args.model_path}")
+        _kv("checkpoint", args.model_path)
         ckpt = torch.load(args.model_path, map_location=device, weights_only=False)
         state_dict = ckpt.get("model", ckpt)
         missing, unexpected = model.load_state_dict(state_dict, strict=False)
-        if missing:
-            print(f"  Missing keys: {len(missing)}")
-        if unexpected:
-            print(f"  Unexpected keys: {len(unexpected)}")
-        print("  Checkpoint loaded.")
+        _kv("missing_keys", len(missing))
+        for k in missing:
+            print(f"      - {k}")
+        _kv("unexpected_keys", len(unexpected))
+        for k in unexpected:
+            print(f"      - {k}")
+        _kv("status", "loaded")
 
     return model.to(device).eval()
 
@@ -291,7 +363,6 @@ def postprocess(predictions, images):
     predictions.pop("pose_enc_list", None)
     predictions.pop("images", None)
 
-    print("Moving results to CPU...")
     for k in list(predictions.keys()):
         if isinstance(predictions[k], torch.Tensor):
             predictions[k] = _squeeze_single_batch(
@@ -353,8 +424,13 @@ def main():
                              "(crop/resize then operates on the rotated aspect ratio)")
 
     # Model
-    parser.add_argument("--model_path", type=str, required=True)
-    parser.add_argument("--image_size", type=int, default=518)
+    parser.add_argument("--model_path", type=str, default='/cpfs/shared/aigc/guowenqi/lingbot-map/lingbot-map.pt')
+    parser.add_argument("--image_size", type=int, default=518,
+                        help="Input image size (preprocessing). Images are resized/cropped to this size.")
+    parser.add_argument("--model_image_size", type=int, default=None,
+                        help="Image size used to construct the model (sizes pos_embed). "
+                             "Defaults to --image_size. Set to the checkpoint's training resolution "
+                             "when it differs from --image_size; ViT will runtime-interpolate pos_embed.")
     parser.add_argument("--patch_size", type=int, default=14)
 
     # Inference mode
@@ -404,13 +480,19 @@ def main():
     # Visualization
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--conf_threshold", type=float, default=1.5)
-    parser.add_argument("--downsample_factor", type=int, default=10)
+    parser.add_argument("--downsample_factor", type=int, default=1)
     parser.add_argument("--point_size", type=float, default=0.00001)
     parser.add_argument("--mask_sky", action="store_true", help="Apply sky segmentation to filter out sky points")
     parser.add_argument("--sky_mask_dir", type=str, default=None,
                         help="Directory for cached sky masks (default: <image_folder>_sky_masks/)")
     parser.add_argument("--sky_mask_visualization_dir", type=str, default=None,
                         help="Save sky mask visualizations (original | mask | overlay) to this directory")
+    parser.add_argument("--mask_dir", type=str, default=None,
+                        help="Directory of foreground masks (one per image, same basename). "
+                             "Pixels where mask>0 are kept; background pixels are zeroed out of depth_conf "
+                             "so the confidence threshold drops them from the point cloud.")
+    parser.add_argument("--mask_invert", action="store_true",
+                        help="Invert mask semantics: keep mask==0 pixels (treat zeros as foreground).")
     parser.add_argument("--export_preprocessed", type=str, default=None,
                         help="Export stride-sampled, resized/cropped images to this folder")
 
@@ -418,7 +500,17 @@ def main():
     assert args.image_folder or args.video_path, \
         "Provide --image_folder or --video_path"
 
+    if args.model_image_size is None:
+        args.model_image_size = args.image_size
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    print()
+    _banner("LingBot-MAP Demo (3D Reconstruction)")
+    _section("run")
+    _kv("mode", args.mode)
+    _kv("device", str(device))
+    _kv("port", args.port)
 
     # ── Load images & model ──────────────────────────────────────────────────
     t0 = time.time()
@@ -432,17 +524,16 @@ def main():
     # Export preprocessed images if requested
     if args.export_preprocessed:
         os.makedirs(args.export_preprocessed, exist_ok=True)
-        print(f"Exporting {images.shape[0]} preprocessed images to {args.export_preprocessed}...")
+        _kv("export_to", args.export_preprocessed)
         for i in range(images.shape[0]):
             img = (images[i].permute(1, 2, 0).numpy() * 255).clip(0, 255).astype(np.uint8)
             cv2.imwrite(
                 os.path.join(args.export_preprocessed, f"{i:06d}.png"),
                 cv2.cvtColor(img, cv2.COLOR_RGB2BGR),
             )
-        print(f"Exported to {args.export_preprocessed}")
 
     model = load_model(args, device)
-    print(f"Total load time: {time.time() - t0:.1f}s")
+    _kv("load_time", f"{time.time() - t0:.1f}s")
 
     # Pick inference dtype; autocast still runs for the ops that need fp32 (e.g. LayerNorm).
     if torch.cuda.is_available():
@@ -456,88 +547,35 @@ def main():
     # runs each head under `autocast(enabled=False)`, so camera/depth/point heads
     # keep fp32 weights automatically.
     if dtype != torch.float32 and getattr(model, "aggregator", None) is not None:
-        print(f"Casting aggregator to {dtype} (heads kept in fp32)")
+        _kv("aggregator_dtype", str(dtype))
         model.aggregator = model.aggregator.to(dtype=dtype)
 
     images = images.to(device)
     num_frames = images.shape[0]
-    print(f"Input: {num_frames} frames, shape {tuple(images.shape)}")
-    print(f"Mode: {args.mode}")
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        print(
-            f"GPU mem after load: "
-            f"alloc={torch.cuda.memory_allocated()/1e9:.2f} GB, "
-            f"reserved={torch.cuda.memory_reserved()/1e9:.2f} GB"
-        )
 
     if args.keyframe_interval is None:
         if args.mode == "streaming" and num_frames > 320:
             args.keyframe_interval = (num_frames + 319) // 320
-            print(
-                f"Auto-selected --keyframe_interval={args.keyframe_interval} "
-                f"(num_frames={num_frames} > 320)."
-            )
         else:
             args.keyframe_interval = 1
 
-    if args.keyframe_interval > 1:
-        if args.mode == "streaming":
-            print(
-                f"Keyframe streaming enabled: interval={args.keyframe_interval} "
-                f"(after the first {args.num_scale_frames} scale frames)."
-            )
-        else:  # windowed
-            actual_per_window = (
-                args.num_scale_frames
-                + max(0, args.window_size - args.num_scale_frames) * args.keyframe_interval
-            )
-            print(
-                f"Keyframe windowed enabled: interval={args.keyframe_interval}, "
-                f"each window covers up to {actual_per_window} actual frames "
-                f"(window_size={args.window_size} keyframes, scale={args.num_scale_frames})."
-            )
+    if args.mode != "streaming" and args.keyframe_interval != 1:
+        args.keyframe_interval = 1
 
-    # ── Optional: torch.compile + CUDA-graph warmup (streaming only) ────────
-    if args.compile:
-        if args.mode != "streaming":
-            print(
-                f"--compile only applies to --mode streaming (got {args.mode!r}); "
-                "skipping compile."
-            )
-        else:
-            scale_for_warm = min(args.num_scale_frames, num_frames)
-            if scale_for_warm >= num_frames:
-                scale_for_warm = max(1, num_frames - 1)
-            warm_stream_n = min(10, max(1, num_frames - scale_for_warm))
-            warm_h, warm_w = int(images.shape[-2]), int(images.shape[-1])
-            print(
-                f"Warmup eager (scale={scale_for_warm} + {warm_stream_n} streaming, "
-                f"shape={warm_h}x{warm_w}, kf_int={args.keyframe_interval})..."
-            )
-            t_warm = time.time()
-            _warm_streaming(
-                model, images, scale_for_warm, warm_stream_n, dtype,
-                passes=1, keyframe_interval=args.keyframe_interval,
-            )
-            print(f"  eager warmup: {time.time() - t_warm:.1f}s")
-
-            print("Compiling hot modules...")
-            compile_model(model)
-
-            # 3 passes under compile: 1st captures CUDA graphs, 2nd/3rd replay so
-            # the caching allocator / graph-address map converge on the state the
-            # real inference will see. See gct_profile.py:302-306 for rationale.
-            print("Warmup compiled (3x dress rehearsal)...")
-            t_warm = time.time()
-            _warm_streaming(
-                model, images, scale_for_warm, warm_stream_n, dtype,
-                passes=3, keyframe_interval=args.keyframe_interval,
-            )
-            print(f"  compiled warmup: {time.time() - t_warm:.1f}s")
+    _section("inference")
+    _kv("dtype", str(dtype))
+    _kv("input_shape", tuple(images.shape))
+    _kv("num_frames", num_frames)
+    _kv("keyframe_interval", args.keyframe_interval)
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        _kv(
+            "gpu_mem_pre",
+            f"alloc={torch.cuda.memory_allocated()/1e9:.2f} GB, "
+            f"reserved={torch.cuda.memory_reserved()/1e9:.2f} GB",
+        )
 
     # ── Inference ────────────────────────────────────────────────────────────
-    print(f"Running {args.mode} inference (dtype={dtype})...")
     t0 = time.time()
 
     output_device = torch.device("cpu") if args.offload_to_cpu else None
@@ -561,12 +599,12 @@ def main():
                 output_device=output_device
             )
 
-    print(f"Inference done in {time.time() - t0:.1f}s")
+    _kv("duration", f"{time.time() - t0:.1f}s")
     if torch.cuda.is_available():
-        print(
-            f"GPU peak during inference: "
-            f"{torch.cuda.max_memory_allocated()/1e9:.2f} GB "
-            f"(reserved peak {torch.cuda.max_memory_reserved()/1e9:.2f} GB)"
+        _kv(
+            "gpu_peak",
+            f"alloc={torch.cuda.max_memory_allocated()/1e9:.2f} GB, "
+            f"reserved={torch.cuda.max_memory_reserved()/1e9:.2f} GB",
         )
 
     # ── Post-process ─────────────────────────────────────────────────────────
@@ -580,7 +618,43 @@ def main():
 
     predictions, images_cpu = postprocess(predictions, images_for_post)
 
+    # ── Apply foreground mask to depth_conf ──────────────────────────────────
+    if args.mask_dir is not None:
+        _section("foreground_mask")
+        _kv("mask_dir", args.mask_dir)
+        _kv("invert", bool(args.mask_invert))
+        fg_masks = load_foreground_masks(
+            paths, args.mask_dir,
+            image_size=args.image_size, patch_size=args.patch_size,
+            invert=args.mask_invert,
+        )
+        depth_conf = predictions.get("depth_conf")
+        if depth_conf is None:
+            print("  warning: predictions has no 'depth_conf'; mask not applied")
+        else:
+            S, H, W = depth_conf.shape[-3:]
+            if fg_masks.shape != (S, H, W):
+                fg_resized = np.empty((S, H, W), dtype=np.float32)
+                for i in range(S):
+                    fg_resized[i] = cv2.resize(
+                        fg_masks[i], (W, H), interpolation=cv2.INTER_NEAREST
+                    )
+                fg_masks = fg_resized
+            kept = float(fg_masks.mean())
+            _kv("kept_fraction", f"{kept:.3f}")
+            mask_t = torch.from_numpy(fg_masks).to(depth_conf.dtype)
+            predictions["depth_conf"] = depth_conf * mask_t
+
     # ── Visualize ────────────────────────────────────────────────────────────
+    _section("viewer")
+    _kv("url", f"http://localhost:{args.port}")
+    _kv("conf_threshold", args.conf_threshold)
+    _kv("downsample_factor", args.downsample_factor)
+    _kv("point_size", args.point_size)
+    _kv("mask_sky", bool(args.mask_sky))
+    _hr()
+    print()
+
     try:
         from lingbot_map.vis import PointCloudViewer
         viewer = PointCloudViewer(
@@ -594,7 +668,6 @@ def main():
             sky_mask_dir=args.sky_mask_dir,
             sky_mask_visualization_dir=args.sky_mask_visualization_dir,
         )
-        print(f"3D viewer at http://localhost:{args.port}")
         viewer.run()
     except ImportError:
         print("viser not installed. Install with: pip install lingbot-map[vis]")

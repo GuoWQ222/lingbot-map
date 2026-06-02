@@ -489,21 +489,68 @@ class AggregatorStream(AggregatorBase):
             num_patches = P - self.num_special_tokens
             if self.use_sdpa:
                 # SDPA: dict-based KV cache
-                tokens = self.global_blocks[global_idx](
-                    tokens,
-                    pos=pos,
-                    num_patches=num_patches,
-                    num_special=self.num_special_tokens,
-                    num_frames=num_frames,
-                    enable_3d_rope=self.enable_3d_rope,
-                    kv_cache=self.kv_cache,
-                    global_idx=global_idx,
-                    num_frame_per_block=num_frame_per_block,
-                    num_frame_for_scale=scale_frames,
-                    num_register_tokens=self.num_register_tokens,
+                use_ckpt = (
+                    self.training
+                    and self.use_gradient_checkpoint
+                    and torch.is_grad_enabled()
+                    and tokens.requires_grad
                 )
+                if use_ckpt:
+                    # The SDPA block mutates self.kv_cache[f"k_{global_idx}"]
+                    # in-place. Snapshot the slot's pre-state so that checkpoint
+                    # re-execution during backward sees the same starting cache
+                    # (otherwise the block would torch.cat onto the already-
+                    # written cache and corrupt the K/V used in attention).
+                    cache_keys = (
+                        f"k_{global_idx}", f"v_{global_idx}",
+                        f"k_{global_idx}_special", f"v_{global_idx}_special",
+                    )
+                    pre_state = {key: self.kv_cache.get(key) for key in cache_keys}
+                    block = self.global_blocks[global_idx]
+                    kv_cache_ref = self.kv_cache
+
+                    def _run(tok, _block=block, _cache=kv_cache_ref,
+                             _pre=pre_state, _idx=global_idx,
+                             _num_patches=num_patches, _num_frames=num_frames,
+                             _nfpb=num_frame_per_block, _nffs=scale_frames):
+                        for k, v in _pre.items():
+                            _cache[k] = v
+                        return _block(
+                            tok,
+                            pos=pos,
+                            enable_ulysses_cp=False,
+                            num_patches=_num_patches,
+                            num_special=self.num_special_tokens,
+                            num_frames=_num_frames,
+                            enable_3d_rope=self.enable_3d_rope,
+                            kv_cache=_cache,
+                            global_idx=_idx,
+                            num_frame_per_block=_nfpb,
+                            num_frame_for_scale=_nffs,
+                            num_register_tokens=self.num_register_tokens,
+                        )
+
+                    from torch.utils.checkpoint import checkpoint
+                    tokens = checkpoint(_run, tokens, use_reentrant=False)
+                else:
+                    tokens = self.global_blocks[global_idx](
+                        tokens,
+                        pos=pos,
+                        enable_ulysses_cp=False,
+                        num_patches=num_patches,
+                        num_special=self.num_special_tokens,
+                        num_frames=num_frames,
+                        enable_3d_rope=self.enable_3d_rope,
+                        kv_cache=self.kv_cache,
+                        global_idx=global_idx,
+                        num_frame_per_block=num_frame_per_block,
+                        num_frame_for_scale=scale_frames,
+                        num_register_tokens=self.num_register_tokens,
+                    )
             else:
-                # FlashInfer: paged KV cache manager
+                # FlashInfer: paged KV cache manager. Checkpoint is unsafe here
+                # because the manager's paged state is not snapshot-restorable;
+                # we skip activation checkpointing on this path.
                 manager = self._get_flashinfer_manager(tokens.device, tokens.dtype, tokens_per_frame=P)
                 tokens = self.global_blocks[global_idx](
                     tokens,
