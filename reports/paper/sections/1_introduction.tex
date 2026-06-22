@@ -1,0 +1,55 @@
+\section{Introduction}
+\label{sec:intro}
+
+\begin{figure}[p]
+  \centering
+  \begin{overpic}[width=1.\columnwidth, trim={30 140 40 40}, clip]{figures/teaser.pdf}
+	\end{overpic}
+  \caption{\textbf{Visualization results of \method in VO mode on varying scenes:} Given a continuous video stream, \method performs \textit{efficient} \textbf{streaming} 3D reconstruction with accurate camera pose estimation and high-quality point cloud reconstruction. Examples include Real-World Captured Aerial Video (\emph{top-left}), World Model Generated Cartoon Video (\emph{top-right}), Long-sequence Multi-Room Traversal Video (\emph{middle}), and Long-sequence Outdoor Driving video (\emph{bottom}).}
+  \label{fig:visualization}
+\end{figure}
+
+
+We perceive the world through a continuous stream of visual input, yet our spatial memory is not a faithful recording of every moment: it is sparse, structured, and efficient.
+Rather than retaining every observation, human spatial cognition selectively preserves only the most essential cues, enabling coherent navigation through large-scale environments over extended periods.
+Can we build machines that operate similarly, performing streaming 3D reconstruction from continuous visual input, selectively and efficiently?
+
+In recent years, 3D foundation models have advanced rapidly, with methods such as VGGT~\cite{wang2025vggt} and Depth Anything 3~\cite{depthanything3} directly predicting camera poses, depth maps, and dense point maps from multiple images in a single feed-forward pass.
+However, these successes are largely confined to offline settings, where the full image set is available and processed globally.
+Recent efforts~\cite{cut3r,streamVGGT,stream3r2025,li2025wint3r} have begun to adapt these capabilities to streaming reconstruction, but existing approaches still exhibit limited robustness to long sequences and complex scenes.
+The core difficulty is selective context management: balancing rich geometric context for long-term consistency with a compact state for efficient inference.
+
+Existing methods adopt different strategies to manage streaming context, each involving distinct trade-offs.
+CUT3R~\cite{cut3r} maintains a persistent recurrent-style state, but its aggressive compression can lead to state forgetting and weak retention of essential geometric priors.
+In contrast, StreamVGGT~\cite{streamVGGT} and Stream3R \cite{stream3r2025} adopt causal attention and caching, yet retain near-complete history without explicit selection, mixing useful geometry with redundancy and causing memory and computation to grow rapidly.
+A third line of work, such as VGGT-SLAM~\cite{vggtslam} and MASt3R-SLAM~\cite{mast3rslam}, integrates learned 3D models with classical SLAM backends. While these methods incorporate structured context management through keyframe selection and pose-graph maintenance, such selection relies on hand-crafted heuristics rather than learned priors, and iterative optimization further limits real-time applicability.
+These observations point to a key design principle: the streaming state should selectively retain \emph{what} matters most, not merely how much, and this selection should be grounded in geometric priors yet learned end-to-end from data.
+
+
+To this end, we introduce \method, a streaming foundation model built around Geometric Context Attention (GCA) that realizes this principle within a unified attention framework.
+The design draws on a key insight from classical SLAM systems: robust real-time reconstruction requires maintaining distinct types of spatial context---a reference frame for coordinate grounding, a local window for dense local geometry estimation, and a global map for drift correction.
+Accordingly, GCA explicitly maintains three complementary types of context: an \emph{anchor context} for coordinate and scale grounding, a local \emph{pose-reference window} that retains dense visual features from recent frames for accurate local geometry estimation, and a \emph{trajectory memory} that compresses the full observation history into compact per-frame tokens for global consistency.
+While the context structure is motivated by classical reconstruction principles, GCA replaces hand-crafted optimization with end-to-end learned attention that adaptively weights, encodes, and compresses information within each context type.
+This structured yet learned representation ensures stable and efficient inference even over arbitrarily long sequences, with nearly constant memory and computation per frame, as context beyond the local window is compressed into compact per-frame tokens.
+
+
+
+
+
+To scale up training effectively, we employ a progressive training strategy combined with context parallelism~\cite{jacobs2023deepspeed}, along with a relative loss formulation that facilitates stable optimization on long sequences.
+This allows \method to learn efficiently from diverse, large-scale 3D datasets.
+We evaluate \method on comprehensive benchmarks, including Oxford Spires, 7-Scenes, Tanks and Temples, ETH3D, and show consistent improvements over existing streaming methods in both camera pose estimation and dense 3D reconstruction quality.
+
+Our contributions are summarized as follows:
+\begin{itemize}
+    \item We introduce \method, a streaming 3D foundation model built around Geometric Context Attention (GCA), which maintains three complementary context types -- anchor, pose-reference window, and trajectory memory -- for efficient and consistent long-sequence streaming inference.
+    \item We propose an efficient training recipe based on progressive training and context parallelism with a relative loss formulation for stable long-sequence optimization.
+    \item We demonstrate that \method achieves state-of-the-art performance on multiple benchmarks (Oxford Spires, Tanks and Temples, ETH3D, and 7-Scenes), significantly outperforming existing streaming approaches in reconstruction quality and inference speed.
+\end{itemize}
+ 
+
+
+
+
+
+

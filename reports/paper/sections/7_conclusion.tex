@@ -1,0 +1,22 @@
+\section{Conclusion and Discussion}
+\label{sec:conclusion}
+
+We have presented \method, a streaming foundation model for long-range 3D reconstruction from continuous visual input.
+At its core is Geometric Context Attention (GCA), which decomposes the streaming state into three complementary context types — anchor, local pose-reference window, and trajectory memory — inspired by the structure of classical SLAM systems but learned end-to-end.
+This design reduces per-frame context growth by roughly $80{\times}$ compared to causal attention, enabling stable inference over arbitrarily long sequences at around 20 FPS.
+Extensive evaluations across multiple benchmarks demonstrate that \method achieves state-of-the-art performance among streaming methods, and even surpasses offline and optimization-based approaches on large-scale datasets such as Oxford Spires.
+By enabling accurate, real-time dense 3D reconstruction from continuous visual streams, \method opens the door to a wide range of applications, including autonomous navigation, augmented reality, and, most notably, embodied AI systems that require persistent, on-the-fly spatial understanding to interact with the physical world.
+
+\paragraph{Limitations.}
+While \method demonstrates strong performance on diverse benchmarks, several limitations remain.
+First, the model currently does not incorporate explicit loop-closure detection, which could further reduce accumulated drift when revisiting previously observed regions.
+Second, the trajectory memory compression into a fixed number of tokens per frame may lose fine-grained geometric details that could be beneficial for very long sequences spanning tens of thousands of frames.
+Third, like other feed-forward methods, our approach does not perform test-time optimization, which could further refine the reconstruction quality in challenging scenarios.
+
+\paragraph{Future Directions.}
+A promising direction is to incorporate bundle-adjustment-like refinement and explicit loop-closure detection into the attention mechanism, further closing the gap with classical SLAM backends while retaining end-to-end differentiability.
+Additionally, extending \method to handle dynamic scenes with moving objects, integrating multi-modal inputs such as LiDAR or IMU data, and exploring the model as a backbone for downstream applications such as novel view synthesis and navigation are exciting avenues for future work.
+
+
+\section*{Acknowledgements}
+We thank Shangzhan Zhang, Jianyuan Wang, Yudong Jin, Christian Rupprecht, and Xun Cao for their helpful discussions and support.

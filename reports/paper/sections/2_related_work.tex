@@ -1,0 +1,35 @@
+\section{Related Work}
+\label{sec:related}
+
+\noindent\textbf{Traditional 3D Reconstruction.}
+Traditional 3D reconstruction methods mainly include Structure-from-Motion (SfM)~\cite{snavely2006photo, schonberger2016structure, pan2024global}, Simultaneous Localization and Mapping (SLAM)~\cite{mur2015orb,mur2017orb,campos2021orb}, and Multi-View Stereo (MVS)~\cite{furukawa2009accurate,schonberger2016pixelwise,yao2018mvsnet}. SfM and SLAM recover camera poses and scene geometry from multi-view observations, where SfM typically operates offline on unordered image collections, while SLAM processes video streams online. These systems are usually complex and highly modular, typically centered around optimization-based bundle adjustment for camera pose estimation. In contrast, MVS focuses on dense reconstruction given known camera poses. Over the past decade, many works have explored replacing individual components of these pipelines with deep learning modules, particularly for feature extraction~\cite{detone2018superpoint} and matching~\cite{sarlin2020superglue,sun2021loftr}. More recently, several approaches attempt to implement SfM, SLAM, or MVS in an end-to-end manner, such as VGGTSfM~\cite{wang2024vggsfm}, DROID-SLAM~\cite{teed2021droid}, and MVSNet~\cite{yao2018mvsnet,yao2019recurrent}.
+
+\noindent\textbf{3D Foundation Model.}
+DUSt3R~\cite{dust3r} represents a paradigm shift in feed-forward 3D reconstruction.
+Given a collection of unposed images, DUSt3R directly regresses a dense 3D reconstruction of the scene without explicit geometric modeling.
+However, DUSt3R~\cite{dust3r} only supports two-view input and requires aligning all results via optimization for additional views.
+To support more than two views and improve reconstruction quality, VGGT~\cite{wang2025vggt} uses an advanced transformer architecture that includes cross-view attention layers, achieving state-of-the-art performance on standard benchmarks.
+Crucially, VGGT demonstrates that leveraging large-scale data together with powerful model architectures can significantly improve reconstruction quality.
+Building on this foundation, numerous subsequent works have advanced feed-forward reconstruction across various dimensions, including improving reconstruction accuracy~\cite{wang2025vggt, zhang2025flare, wang2025pi, depthanything3}, enhancing computational efficiency~\cite{yang2025fast3r, liu2025slam3r}, handling dynamic scenes~\cite{zhang2024monst3r, sucar2025dynamic, chen2025easi3r, feng2025st4rtrack, xiao2025spatialtracker, lu2025align3r, jin2025stereo4d, wang2025spatialvid}, enabling novel view synthesis~\cite{lin2025longsplat, ye2024no, jiang2025anysplat, chen2025long3r, smart2024splatt3r, xu2024grm, hong2024lrm, tang2024lgm, xu2024dmv3d, li2024instant3d, wang2024pflrm}, and incorporating multi-modal inputs~\cite{lu2025matrix3d, jang2025pow3r, keetha2025mapanything}.
+However, these methods are primarily designed for offline processing and do not address the unique challenges of streaming 3D reconstruction, such as maintaining long-term consistency and managing computational resources over extended sequences.
+
+\noindent\textbf{Streaming 3D Reconstruction.}
+Driven by the need for online applications, streaming 3D reconstruction can be broadly categorized into hybrid SLAM-based approaches and end-to-end feed-forward methods.
+Hybrid methods typically integrate 3D foundation models with traditional SLAM pipelines~\cite{vggtslam, mast3rslam, deng2025vggt}, aiming to leverage the strengths of both paradigms.
+However, these approaches often rely on hand-crafted components and careful parameter tuning to achieve optimal performance, lacking the benefits of a fully end-to-end learning framework.
+In contrast, recent feed-forward streaming methods~\cite{stream3r2025, li2025wint3r, streamVGGT, wang20253d, wang2025continuous} extend the offline paradigm to streaming settings by employing Recurrent Neural Network (RNN)-based architectures or by combining caching mechanisms with causal attention.
+Specifically, CUT3R~\cite{cut3r} maintains a persistent state that is updated recurrently via RNN architectures.
+To mitigate state forgetting, TTT3R~\cite{chen2025ttt3r} adopts a test-time training strategy.
+Meanwhile, StreamVGGT~\cite{streamVGGT}, Stream3R~\cite{stream3r2025}, and Wint3R~\cite{li2025wint3r} adapt the more advanced VGGT architecture using causal attention and caching strategies.
+Despite these advances, existing streaming methods often struggle to maintain performance over long input sequences and in complex environments.
+Common failure modes include significant trajectory drift, degraded reconstruction accuracy, and prohibitive growth in memory and computational requirements.
+We attribute these limitations to the absence of a principled mechanism for effectively retaining essential geometric context during the streaming process.
+Concurrently, LoGeR~\cite{zhang2026loger}, Scal3R~\cite{xie2026scal3r}, and ZipMap~\cite{jin2026zipmap} explore scaling 3D reconstruction to long sequences.
+%
+LoGeR combines sliding window attention for local alignment with test-time training (TTT) for global consistency, while Scal3R extends the TTT paradigm with chunking and visual place recognition for large-scale scenes.
+%
+ZipMap further employs TTT layers to compress an entire image collection into a compact hidden scene state, achieving linear-time bidirectional reconstruction.
+%
+However, these methods rely on test-time parameter updates, which introduces additional computational overhead and limits real-time applicability.
+%
+In contrast, our \method is a purely feed-forward streaming model that requires no test-time training or post-optimization, achieving real-time inference through a compact geometric context design.

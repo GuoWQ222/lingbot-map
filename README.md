@@ -10,7 +10,7 @@ Robbyant Team
 <div align="center">
 
 [![Paper](https://img.shields.io/static/v1?label=Paper&message=arXiv&color=red&logo=arxiv)](https://arxiv.org/abs/2604.14141)
-[![PDF](https://img.shields.io/static/v1?label=Paper&message=PDF&color=red&logo=adobeacrobatreader)](lingbot-map_paper.pdf)
+[![PDF](https://img.shields.io/static/v1?label=Paper&message=PDF&color=red&logo=adobeacrobatreader)](reports/lingbot-map_paper.pdf)
 [![Project](https://img.shields.io/badge/Project-Website-blue)](https://technology.robbyant.com/lingbot-map)
 [![HuggingFace](https://img.shields.io/static/v1?label=%F0%9F%A4%97%20Model&message=HuggingFace&color=orange)](https://huggingface.co/robbyant/lingbot-map)
 [![ModelScope](https://img.shields.io/static/v1?label=%F0%9F%A4%96%20Model&message=ModelScope&color=purple)](https://www.modelscope.cn/models/Robbyant/lingbot-map)
@@ -56,6 +56,9 @@ pip install torch==2.9.1 torchvision==0.24.1 --index-url https://download.pytorc
 ```bash
 pip install -e .
 ```
+
+> Local organized copy: the bundled checkpoint is under `checkpoints/`, training scripts are under `scripts/train/`, evaluation scripts are under `scripts/eval/`, visualization helpers are under `scripts/visualize/`, generated outputs are under `outputs/`, and reports/papers are under `reports/`.
+> For example, use `--model_path checkpoints/lingbot-map.pt` when running from the repository root.
 
 **4. Install FlashInfer (recommended)**
 

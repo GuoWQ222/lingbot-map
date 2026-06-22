@@ -1,0 +1,147 @@
+\section{Method}
+\label{sec:method}
+
+In~\cref{sec:overview}, we present an overview of our method and the problem formulation.
+We then introduce Geometric Context Attention (GCA) (\cref{sec:attention}), a mechanism specifically designed for streaming 3D reconstruction. \cref{sec:network} describes the network architecture and the training procedure.
+Finally,~\cref{sec:inference} presents the inference pipeline for efficient inference.
+
+\subsection{Overview}
+\label{sec:overview}
+Given a continuous stream of images $\mathcal{I} = \{I_1, I_2, \ldots\}$, \method processes each new frame $I_t$ upon arrival and estimates its camera pose $\hat{P}_t$ and depth map $\hat{D}_t$ using only the current and previously observed frames $\{I_1, \ldots, I_t\}$, without access to future observations.
+Building on the architecture of recent feed-forward 3D models~\cite{wang2025vggt}, we design a streaming variant where each frame is encoded by a ViT backbone and processed through alternating layers of frame-wise attention and Geometric Context Attention (GCA), before task-specific heads predict the camera pose and depth map (see~\cref{fig:GCT}).
+The key to enabling efficient streaming inference is GCA, which maintains three complementary geometric contexts: anchor, pose-reference window, and trajectory memory, thereby balancing long-term consistency with compact state representation.
+We detail GCA in~\cref{sec:attention}, the overall architecture and training strategy in~\cref{sec:network}, and the inference pipeline in~\cref{sec:inference}.
+
+
+
+\subsection{Geometric Context Attention}
+\label{sec:attention}
+The central challenge of streaming 3D reconstruction is managing geometric context: the model must retain sufficient long-range context to ensure global consistency, yet keep its streaming state compact enough for efficient inference.
+Classical SLAM and SfM systems provide structural insights into this trade-off by decomposing the streaming state into three distinct types of spatial context, each serving a complementary role: a reference frame for coordinate and scale grounding, a local window of recent observations for dense geometry estimation, and a global map for correcting accumulated drift.
+Drawing on this principle, GCA decomposes the streaming context into three complementary learned attention mechanisms, replacing hand-crafted optimization with end-to-end differentiable attention: \emph{anchor context}, a local \emph{pose-reference window}, and \emph{trajectory memory}.
+We describe each below.
+
+\noindent\textbf{Anchor Context.}
+Monocular reconstruction is inherently scale-ambiguous, so a consistent coordinate system and absolute scale must be established before streaming begins.
+Offline methods such as DUSt3R~\cite{dust3r} and VGGT~\cite{wang2025vggt} resolve this by normalizing with respect to the \emph{global} point cloud, but this requires access to all frames and is therefore incompatible with causal streaming inference.
+Instead, we designate the first $n$ images ($n \ll N$) as anchor frames and use them to fix the scale.
+We apply full attention among these frames and augment their image tokens with a learnable anchor token, enabling the network to identify and distinguish them from subsequent streaming frames.
+After initialization, the anchor and image tokens for these frames are retained in the attention context, and all subsequent frames attend to them as fixed references.
+During training, we normalize all ground-truth annotations to a canonical scale derived from the anchor frames:
+we compute $s = \frac{1}{|\bar{\mathcal{X}}^{\text{anchor}}|} \sum_{\mathbf{x}\in\bar{\mathcal{X}}^{\text{anchor}}} \lVert\mathbf{x}\rVert_2$ as the mean distance of the ground-truth point cloud $\bar{\mathcal{X}}^{\text{anchor}}$ from the coordinate origin, and divide all ground-truth depths and camera translations by $s$.
+
+\noindent\textbf{Local Pose-Reference Window.}
+Accurately registering each new frame requires dense visual overlap with nearby observations, context that the distant anchor frames alone cannot provide.
+To address this, we maintain a sliding window of the $k$ most recent frames during inference, retaining their \emph{full} image tokens.
+This dense local context provides essential relative pose cues from immediate visual connections, enabling the network to accurately register new frames into the global trajectory.
+To further encourage geometric consistency within the local window, we apply a relative pose loss between frames in this window, as detailed in~\cref{sec:network}.
+
+\noindent\textbf{Trajectory Memory.}
+The anchor context and local window together provide a fixed global reference and dense recent observations, but without any record of intermediate frames, pose errors accumulate unchecked over long sequences, causing the estimated trajectory to drift.
+To mitigate this, we retain a compact trajectory context that summarizes the full observation history.
+Specifically, for frames that fall outside both the anchor set and the active sliding window, we retain only the camera, anchor, and register tokens (i.e.,~6 context tokens per frame) while discarding the memory-intensive image tokens ($M$ tokens per frame).
+Additionally, we incorporate video temporal positional encodings~\cite{wan2025} into the retained tokens to impose temporal ordering on the global trajectory.
+By maintaining this lightweight yet temporally ordered record of all past observations, the trajectory memory provides long-range cues that help correct accumulated drift and ensure global consistency.
+
+
+\noindent\textbf{Attention Mask Design.}
+\cref{fig:attention_map} compares different attention patterns for streaming inference.
+Global attention~(a) attends to all frames but cannot operate in a streaming fashion.
+Causal attention~(b) enables streaming but causes memory and computation to grow linearly with sequence length.
+Sliding window attention~(c) bounds compute but sacrifices long-term context.
+Our GCA~(d) combines the anchor context, trajectory memory, and local window into a structured attention mask that retains long-range consistency with bounded per-frame cost.
+
+\noindent\textbf{Complexity Analysis.}
+For a $T$-frame sequence, the per-frame attention context in GCA comprises $n$ anchor frames with full tokens ($n \cdot (M + 6)$), $k$ window frames with full tokens ($k \cdot (M + 6)$), and $(T - n - k)$ trajectory frames with compact tokens ($6$ each).
+Since $n$ and $k$ are fixed constants, the total context simplifies to $(n + k) \cdot M + 6T$, where the first term is constant and the second grows at a rate of just 6 tokens per frame.
+In contrast, causal attention retains $T \cdot (M + 6) = MT + 6T$ tokens, sharing the same $6T$ term but incurring an additional $MT$ that grows with the full token count.
+Since each new frame adds $(M{+}6)$ tokens under causal attention but only $6$ under GCA, the per-frame growth rate is reduced by roughly $80{\times}$ for typical values ($M {\approx} 500$).
+Concretely, with $n {=} 3$, $k {=} 16$, and $T {=} 10{,}000$, causal attention accumulates ${\sim}5{\times}10^{6}$ tokens, while GCA retains only ${\sim}7{\times}10^{4}$, yielding nearly constant memory and computation per frame.
+
+\begin{figure}[t]
+  \centering
+  \begin{overpic}[width=0.9\columnwidth, trim={30 10 30 0}, clip]{figures/attention.pdf}
+	\end{overpic}
+        \caption{\textbf{Comparison of attention masks.} Each square block represents one frame's tokens, consisting of a small leading segment of context tokens and a larger segment of image tokens. (a)~Full attention attends to all frames. (b)~Causal attention enables streaming but grows linearly with sequence length. (c)~Sliding-window attention bounds cost but loses long-range context. (d)~GCA partitions the streaming context into \textit{anchors} ($n{=}2$), a \textit{local window} ($k{=}2$), and \textit{trajectory memory}, retaining rich long-range context while keeping cost nearly constant as the sequence length increases.}
+
+  \label{fig:attention_map}
+\vspace{-8pt}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \begin{overpic}[width=1\columnwidth]{figures/Network.pdf}
+    \end{overpic}
+  \caption{\textbf{Pipeline of the proposed \method.} The framework processes the current view $T_i$ relative to an initialization set $[T_1, T_n)$. A DINO backbone extracts image features, which are then refined through alternating layers of Frame Attention and GCA. Within the GCA module, the input view aggregates information from the \textit{Anchor Context}, \textit{Local Pose-Reference Window }$[T_{i-k}, T_i)$, and \textit{Trajectory Memory Context}. Finally, task-specific heads predict camera pose and depth maps, enabling robust, memory-efficient streaming 3D reconstruction for long-range sequences.}
+  \label{fig:GCT}
+\end{figure}
+
+
+\subsection{Geometric Context Transformer Framework}
+\label{sec:network}
+\noindent\textbf{Architecture.}
+The overall architecture is illustrated in~\cref{fig:GCT}.
+Each input image is first encoded by a Vision Transformer (ViT) backbone initialized from DINOv2~\cite{oquab2023dinov2} to produce $M$ image tokens per frame.
+These image tokens are augmented with a camera token $\mathbf{c} \in \mathbb{R}^{C}$, four register tokens $\mathbf{r}_j \in \mathbb{R}^{C}$ ($j = 1, \ldots, 4$), and a learnable anchor token $\mathbf{a} \in \mathbb{R}^{C}$.
+The augmented tokens are then processed through multiple alternating layers of Frame Attention and GCA.
+Frame Attention operates independently within each frame, enabling per-frame feature refinement, while GCA operates across frames according to the structured attention mask described in~\cref{sec:attention}, enabling cross-frame geometric reasoning.
+Finally, a camera head takes the camera token to predict the absolute camera pose $\hat{P}_t$, and a depth head takes the image tokens to predict the corresponding depth map $\hat{D}_t$.
+
+\noindent\textbf{Loss Function.}
+We train \method using a composite loss function consisting of depth, absolute pose, and relative pose terms:
+\begin{equation}
+\mathcal{L}
+= \lambda_{\text{depth}} \, \mathcal{L}_{\text{depth}}
++ \lambda_{\text{abs-pose}} \, \mathcal{L}_{\text{abs-pose}}
++ \lambda_{\text{rel-pose}} \, \mathcal{L}_{\text{rel-pose}}.
+\end{equation}
+
+\noindent The depth loss ($\mathcal{L}_{\text{depth}}$) and absolute pose loss ($\mathcal{L}_{\text{abs-pose}}$)
+follow the definitions in VGGT~\cite{wang2025vggt}: 
+$
+  \mathcal{L}_{\text{depth}}
+= \sum_{i=1}^{N} \Big\|
+\Sigma_i^{D} \odot (\hat{D}_i - D_i) \Big\|
+  + \Big\| \Sigma_i^{D} \odot (\nabla \hat{D}_i - \nabla D_i) \Big\|
+  - \alpha \log \Sigma_i^{D},
+  \mathcal{L}_{\text{abs-pose}}
+= \sum_{i=1}^{N} \left\lVert \hat{\mathbf{P}}_{i} - \mathbf{P}_{i} \right\rVert_{\epsilon}.
+$
+Here, $\Sigma_i^{D}$ represents the predicted uncertainty map, and $\odot$ denotes element-wise multiplication.
+Unlike VGGT~\cite{wang2025vggt}, we supervise the network using camera-to-world transformations rather than world-to-camera ones. In the world-to-camera parameterization, rotation and translation are inherently coupled, making translation estimation highly sensitive to rotation errors, particularly in long sequences.
+Inspired by $\pi^3$~\cite{wang2025pi}, we incorporate a relative pose loss over all frame pairs within the sliding window:
+\begin{equation}
+  \mathcal{L}_{\text{rel-pose}}
+= \frac{1}{k (k - 1)}
+  \sum_{\substack{i \neq j \\ i,j \in \{1,\ldots,k\}}} \bigl(
+    \mathcal{L}_{\text{rot}}(i,j)
+    + \lambda_{\text{trans}} \mathcal{L}_{\text{trans}}(i,j)
+  \bigr),
+\end{equation}
+where $\mathcal{L}_{\text{rot}}(i,j)$ and $\mathcal{L}_{\text{trans}}(i,j)$ denote the geodesic rotation error and $\ell_1$ translation error of the relative pose between frames $i$ and $j$, respectively.
+Because the window comprises only already-observed frames, this loss is inherently causal and encourages local trajectory consistency.
+
+
+\noindent\textbf{Progressive View Training.}
+Training directly on long sequences is challenging: early-stage pose errors propagate along the trajectory and destabilize the loss landscape, leading to slow or divergent optimization.
+To address this, we adopt a progressive training strategy that starts with short subsequences and gradually increases the number of views over training.
+This curriculum enables the network to first acquire reliable local geometry estimation from short clips before learning to maintain global consistency across progressively longer trajectories.
+
+\noindent\textbf{Context Parallel.}
+As the number of training views grows, GPU memory becomes the primary bottleneck due to the quadratic cost of cross-frame attention.
+To address this, we employ the Ulysses~\cite{jacobs2023deepspeed} context-parallelism strategy, which distributes different views across multiple GPUs to enable parallel attention computation via efficient all-to-all collective communication.
+
+
+
+\subsection{Inference System Design}
+\label{sec:inference}
+
+Like autoregressive LLMs, our causal model caches the key-value (KV) states of previously processed frames to avoid redundant recomputation. However, with naive causal attention, the KV cache scales linearly with the number of frames, increasing memory consumption and per-frame latency.
+GCA addresses this by keeping the per-frame context compact (see~\cref{sec:attention}), but the sliding-window and trajectory-eviction logic still requires frequent cache updates (appending new entries and discarding old ones), which incur overhead due to repeated memory reallocation under a standard contiguous layout.
+We eliminate this overhead with a paged KV-cache layout~\cite{kwon2023efficient}, in which updates affect only newly appended tokens rather than the entire cached sequence.
+
+We implement the runtime on FlashInfer~\cite{ye2025flashinfer}, which provides native support for paged KV-cache management, as well as optimized attention kernels for paged and sparse KV layouts.
+In the $518 \times 378$ setting with video sequences up to 1000 frames and a sliding window of 64 frames, our FlashInfer-based implementation achieves $\sim$20 FPS, compared to $\sim$10.5 FPS for an otherwise identical PyTorch baseline with contiguous KV-cache updates.
+To support robust long-sequence inference, we select a key frame every $m$ frames to be retained in the KV cache, when the input views are more than our max training views in training.
+
+

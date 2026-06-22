@@ -1,0 +1,94 @@
+\section{Evaluation Benchmark}
+\label{sec:benchmark}
+
+
+
+We establish a comprehensive evaluation benchmark covering 
+camera pose estimation and 3D reconstruction across diverse indoor, 
+outdoor, and large-scale environments.
+
+\subsection{Datasets}
+\label{sec:eval_datasets}
+
+Streaming 3D reconstruction must generalize across a wide spectrum of
+scenarios, from object-centric captures to room-scale interiors and
+city-scale outdoor trajectories, under varying sequence lengths,
+camera motions, and scene complexities.
+To thoroughly evaluate this, our benchmark is built on five
+complementary datasets: Oxford Spires~\cite{tao2025spires},
+ETH3D~\cite{schops2017multi}, 7-Scenes~\cite{shotton2013scene},
+Tanks and Temples~\cite{Knapitsch2017}, and NRGBD~\cite{azinovic2022neural},
+which collectively cover indoor and outdoor environments,
+object-centric and multi-scene trajectories, short sequences
+(tens of frames) to long sequences (thousands of frames), and
+both synthetic-grade and real-world capture conditions.
+Below we describe each dataset and our evaluation configuration.
+
+\noindent\textbf{Oxford Spires}~\cite{tao2025spires} is a large-scale
+outdoor and indoor dataset captured across the historic Oxford campus,
+featuring complex scene transitions, revisits, and significant scale
+variation within each sequence.
+The dataset provides ground-truth camera trajectories from a
+high-precision LiDAR-inertial SLAM system.
+We select 13 scenes with available ground-truth trajectories: Keble
+College~02--05, Observatory Quarter~01--02, Blenheim Palace~01--02
+and~05, Christ Church~01--03 and~05, and Bodleian Library~02.
+We use camera~0 as the viewpoint and evaluate under two settings:
+\textit{sparse} (320 frames, sampled every 12 frames) to test
+single-pass reconstruction within our training range, and
+\textit{dense} (3{,}840 frames) to stress-test long-sequence
+streaming capabilities.
+
+\noindent\textbf{ETH3D}~\cite{schops2017multi} provides
+high-resolution indoor and outdoor images with ground-truth depth maps
+acquired from a laser scanner.
+The scenes span offices, lecture rooms, relief structures, facades,
+playgrounds, terraces, and botanical gardens, covering both small-scale
+indoor environments and large-scale outdoor settings.
+We follow the evaluation configurations established in
+DA3~\cite{depthanything3}, using all available frames.
+We use a threshold of $d = 0.1$\,m for the F1 reconstruction metric.
+
+\noindent\textbf{7-Scenes}~\cite{shotton2013scene} is a widely-used
+indoor RGB-D dataset consisting of 7 scenes (Chess, Fire, Heads,
+Office, Pumpkin, Kitchen, Stairs) captured with a Kinect sensor at
+$640 \times 480$ resolution.
+It is a challenging real-world dataset: the images contain significant
+motion blur, and the scenes feature textureless surfaces and repetitive
+structures that are difficult for pose estimation.
+We downsample the number of frames for each scene by a stride of 5
+to reduce redundancy from the high-framerate Kinect capture while
+retaining sufficient viewpoint coverage.
+
+\noindent\textbf{Tanks and Temples}~\cite{Knapitsch2017} is a
+large-scale outdoor dataset providing high-resolution images, depth
+maps from LiDAR, and ground-truth 3D shapes for benchmarking
+multi-view reconstruction.
+We select 6 scenes covering diverse structures: Barn, Caterpillar,
+Church, Ignatius, Meeting Room, and Truck, with all images included.
+
+\noindent\textbf{NRGBD}~\cite{azinovic2022neural} is a dataset
+designed for neural RGB-D surface reconstruction, containing indoor
+scenes with high-quality ground-truth depth from structured-light
+sensors.
+The scenes include cluttered room-scale environments with fine
+geometric details.
+We sample images with a stride of 5 and evaluate dense reconstruction
+quality using the F1 metric.
+
+\subsection{Metrics}
+\label{sec:metrics}
+
+\noindent\textbf{Camera Pose Estimation.}
+We evaluate camera pose accuracy using the Area Under the Curve (AUC) of the relative pose error at angular thresholds of $3\degree$ and $30\degree$.
+For trajectory-level evaluation, we report the Absolute Trajectory Error (ATE) in meters, which measures global trajectory consistency after Sim(3) alignment, as well as Relative Pose Error for translation (RPE-trans) and rotation (RPE-rot), which capture local frame-to-frame accuracy.
+
+\noindent\textbf{3D Reconstruction.} 
+We evaluate reconstruction quality using the F1 score, Accuracy (Acc), and Completeness (Comp).
+The reconstructed and ground-truth point clouds are first aligned using the Umeyama~
+\cite{umeyama2002least} method, followed by ICP refinement (threshold 0.1).
+For ETH3D, which features large-scale scenes with relatively sparse ground-truth points, we adopt an F1 threshold of 0.25 with a voxel size of 0.039m.
+For 7-Scenes and NRGBD, which contain many frames and dense depth projections producing tens of millions of points, we first downsample both point clouds to a uniform voxel grid (voxel size $4.0/512$) before ICP, and set the F1 threshold to 0.05.
+
+
+

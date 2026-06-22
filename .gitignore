@@ -11,3 +11,9 @@ CLAUDE.md
 .claude/
 .agents/
 skyseg.onnx
+# Local large artifacts
+checkpoints/
+outputs/
+*.log
+__pycache__/
+*.pyc

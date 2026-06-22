@@ -92,6 +92,10 @@ class PointCloudViewer:
         sky_mask_dir: Optional[str] = None,
         sky_mask_visualization_dir: Optional[str] = None,
         depth_stride: int = 1,
+        vis_threshold_label: str = "Visibility Threshold",
+        vis_threshold_min: float = 1.0,
+        vis_threshold_max: float = 5.0,
+        vis_threshold_step: float = 0.01,
     ):
         self.model = model
         self.size = size
@@ -101,6 +105,10 @@ class PointCloudViewer:
         self.device = device
         self.conf_list = conf_list
         self.vis_threshold = vis_threshold
+        self.vis_threshold_label = vis_threshold_label
+        self.vis_threshold_min = float(vis_threshold_min)
+        self.vis_threshold_max = float(vis_threshold_max)
+        self.vis_threshold_step = float(vis_threshold_step)
         self.point_size = point_size
         self.tt = lambda x: torch.from_numpy(x).float().to(device)
 
@@ -415,7 +423,10 @@ class PointCloudViewer:
             "Show Camera", initial_value=self.show_camera
         )
         self.vis_threshold_slider = self.server.gui.add_slider(
-            "Visibility Threshold", min=1.0, max=5.0, step=0.01,
+            self.vis_threshold_label,
+            min=self.vis_threshold_min,
+            max=self.vis_threshold_max,
+            step=self.vis_threshold_step,
             initial_value=self.vis_threshold,
         )
         self.camera_downsample_slider = self.server.gui.add_slider(
@@ -1045,7 +1056,7 @@ class PointCloudViewer:
             normalized_indices = np.array(list(range(num_cameras))) / (num_cameras - 1)
         else:
             normalized_indices = np.array([0.0])
-        cmap = cm.get_cmap('viridis')
+        cmap = cm.get_cmap('gist_rainbow')
         self.camera_colors = cmap(normalized_indices)
         return pcs, step_list
 

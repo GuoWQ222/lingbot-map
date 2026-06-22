@@ -14,6 +14,7 @@ from typing import List, Dict, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 from .head_act import activate_head
 from .utils import create_uv_grid, position_grid_to_embed
 
@@ -53,6 +54,7 @@ class DPTHead(nn.Module):
         pos_embed: bool = True,
         feature_only: bool = False,
         down_ratio: int = 1,
+        use_activation_checkpoint: bool = True,
     ) -> None:
         super(DPTHead, self).__init__()
         self.patch_size = patch_size
@@ -62,6 +64,7 @@ class DPTHead(nn.Module):
         self.feature_only = feature_only
         self.down_ratio = down_ratio
         self.intermediate_layer_idx = intermediate_layer_idx
+        self.use_activation_checkpoint = use_activation_checkpoint
 
         self.norm = nn.LayerNorm(dim_in)
 
@@ -117,7 +120,7 @@ class DPTHead(nn.Module):
         aggregated_tokens_list: List[torch.Tensor],
         images: torch.Tensor,
         patch_start_idx: int,
-        frames_chunk_size: int = 8,
+        frames_chunk_size: int = 1,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Forward pass through the DPT head, supports processing by chunking frames.
@@ -127,7 +130,7 @@ class DPTHead(nn.Module):
             patch_start_idx (int): Starting index for patch tokens in the token sequence.
                 Used to separate patch tokens from other tokens (e.g., camera or register tokens).
             frames_chunk_size (int, optional): Number of frames to process in each chunk.
-                If None or larger than S, all frames are processed at once. Default: 8.
+                If None or larger than S, all frames are processed at once. Default: 1.
 
         Returns:
             Tensor or Tuple[Tensor, Tensor]:
@@ -140,7 +143,7 @@ class DPTHead(nn.Module):
 
         # If frames_chunk_size is not specified or greater than S, process all frames at once
         if frames_chunk_size is None or frames_chunk_size >= S:
-            return self._forward_impl(aggregated_tokens_list, images, patch_start_idx)
+            return self._forward_impl_maybe_checkpoint(aggregated_tokens_list, images, patch_start_idx)
 
         # Otherwise, process frames in chunks to manage memory usage
         assert frames_chunk_size > 0
@@ -154,12 +157,12 @@ class DPTHead(nn.Module):
 
             # Process batch of frames
             if self.feature_only:
-                chunk_output = self._forward_impl(
+                chunk_output = self._forward_impl_maybe_checkpoint(
                     aggregated_tokens_list, images, patch_start_idx, frames_start_idx, frames_end_idx
                 )
                 all_preds.append(chunk_output)
             else:
-                chunk_preds, chunk_conf = self._forward_impl(
+                chunk_preds, chunk_conf = self._forward_impl_maybe_checkpoint(
                     aggregated_tokens_list, images, patch_start_idx, frames_start_idx, frames_end_idx
                 )
                 all_preds.append(chunk_preds)
@@ -170,6 +173,31 @@ class DPTHead(nn.Module):
             return torch.cat(all_preds, dim=1)
         else:
             return torch.cat(all_preds, dim=1), torch.cat(all_conf, dim=1)
+
+    def _forward_impl_maybe_checkpoint(
+        self,
+        aggregated_tokens_list: List[torch.Tensor],
+        images: torch.Tensor,
+        patch_start_idx: int,
+        frames_start_idx: int = None,
+        frames_end_idx: int = None,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        if (
+            self.training
+            and self.use_activation_checkpoint
+            and torch.is_grad_enabled()
+            and any(t.requires_grad for t in aggregated_tokens_list)
+        ):
+            def run(images_arg: torch.Tensor, *tokens: torch.Tensor):
+                return self._forward_impl(
+                    list(tokens), images_arg, patch_start_idx, frames_start_idx, frames_end_idx
+                )
+
+            return checkpoint(run, images, *aggregated_tokens_list, use_reentrant=False)
+
+        return self._forward_impl(
+            aggregated_tokens_list, images, patch_start_idx, frames_start_idx, frames_end_idx
+        )
 
     def _forward_impl(
         self,

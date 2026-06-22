@@ -319,7 +319,7 @@ class WanRotaryPosEmbed(nn.Module):
             # 每个维度独立调用1D RoPE
             # 返回复数形式的频率: [max_seq_len, dim//2]
             freq = get_1d_rotary_pos_embed(
-                dim, max_seq_len, theta, use_real=False, repeat_interleave_real=False, freqs_dtype=torch.float64
+                dim, max_seq_len, theta, use_real=False, repeat_interleave_real=False, freqs_dtype=torch.float32
             )
             freqs.append(freq)
         # 将三个维度的频率在最后一维拼接: [max_seq_len, (t_dim + h_dim + w_dim)//2]
@@ -453,11 +453,13 @@ def apply_rotary_emb(x, freqs):
     """
     # 步骤1：reshape成 [..., head_dim//2, 2] 形式，最后一维表示(real, imag)
     # 例如：[b, h, seq, 64] -> [b, h, seq, 32, 2]
-    x_reshaped = x.to(torch.float64).reshape(x.shape[0], x.shape[1], x.shape[2], -1, 2)
+    # 使用float32/complex64即可；float64会在长序列全局注意力中显著放大显存。
+    x_reshaped = x.float().reshape(x.shape[0], x.shape[1], x.shape[2], -1, 2)
     
     # 步骤2：转换为复数表示 [b, h, seq, 32]
     # 每个元素是 real + imag*i
     x_complex = torch.view_as_complex(x_reshaped)
+    freqs = freqs.to(device=x.device, dtype=x_complex.dtype)
     
     # 步骤3：复数乘法实现旋转
     # x_complex * freqs 相当于将每对特征旋转θ角度

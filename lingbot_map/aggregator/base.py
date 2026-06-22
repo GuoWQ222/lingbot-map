@@ -120,7 +120,8 @@ class AggregatorBase(nn.Module, ABC):
         self.pretrained_path = pretrained_path
         self.enable_ulysses_cp = False  # CP disabled
 
-        print("pretrained_path:", self.pretrained_path)
+        if self.pretrained_path:
+            logger.info("DINO pretrained_path: %s", self.pretrained_path)
 
         # Validate depth
         if self.depth % self.aa_block_size != 0:
@@ -217,19 +218,22 @@ class AggregatorBase(nn.Module, ABC):
                 init_values=init_values,
             )
 
-            # Load pretrained weights
-            try:
-                ckpt = torch.load(pretrained_path)
-                del ckpt['pos_embed']
-                logger.info("Loading pretrained weights for DINOv2")
-                missing, unexpected = self.patch_embed.load_state_dict(ckpt, strict=False)
-                logger.info(f"Missing keys: {len(missing)}, Unexpected keys: {len(unexpected)}")
+            self._dino_checkpoint = None
+            # Load standalone DINO weights only when an explicit path is provided.
+            # Fine-tuning usually initializes from the LingBot-MAP checkpoint below,
+            # so an empty path should not trigger a noisy torch.load('').
+            if pretrained_path:
+                try:
+                    ckpt = torch.load(pretrained_path, map_location="cpu")
+                    ckpt.pop('pos_embed', None)
+                    logger.info("Loading pretrained weights for DINOv2")
+                    missing, unexpected = self.patch_embed.load_state_dict(ckpt, strict=False)
+                    logger.info(f"Missing keys: {len(missing)}, Unexpected keys: {len(unexpected)}")
 
-                # Store checkpoint for block initialization
-                self._dino_checkpoint = ckpt
-            except Exception as e:
-                logger.warning(f"Failed to load pretrained weights: {e}")
-                self._dino_checkpoint = None
+                    # Store checkpoint for block initialization
+                    self._dino_checkpoint = ckpt
+                except Exception as e:
+                    logger.warning(f"Failed to load pretrained weights: {e}")
 
             # Disable gradients for mask token
             if hasattr(self.patch_embed, "mask_token"):

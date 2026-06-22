@@ -166,6 +166,7 @@ class GCTStream(GCTBase):
         use_sdpa: bool = False,  # If True, use SDPA (no flashinfer needed); default: FlashInfer
         # Gradient checkpointing
         use_gradient_checkpoint: bool = True,
+        camera_activation_checkpoint: bool = True,
         # Camera head iterative refinement (lower = faster inference; default 4)
         camera_num_iterations: int = 4,
     ):
@@ -217,6 +218,7 @@ class GCTStream(GCTBase):
         self.kv_cache_camera_only = kv_cache_camera_only
         self.use_sdpa = use_sdpa
         self.camera_num_iterations = camera_num_iterations
+        self.camera_activation_checkpoint = camera_activation_checkpoint
 
         # Call base class __init__ (will call _build_aggregator)
         super().__init__(
@@ -291,6 +293,7 @@ class GCTStream(GCTBase):
             enable_3d_rope=self.enable_camera_3d_rope,
             max_frame_num=self.max_frame_num,
             rope_theta=self.camera_rope_theta,
+            use_activation_checkpoint=self.camera_activation_checkpoint,
         )
 
     def _aggregate_features(

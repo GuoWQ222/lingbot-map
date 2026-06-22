@@ -39,6 +39,7 @@ class CameraHead(nn.Module):
         quat_act: str = "linear",
         fl_act: str = "relu",  # Field of view activations: ensures FOV values are positive.
         enable_ulysses_cp=False,
+        use_activation_checkpoint: bool = True,
     ):
         super().__init__()
 
@@ -53,6 +54,7 @@ class CameraHead(nn.Module):
         self.trunk_depth = trunk_depth
 
         self.enable_ulysses_cp = enable_ulysses_cp
+        self.use_activation_checkpoint = use_activation_checkpoint
 
         # Build the trunk using a sequence of transformer blocks.
         self.trunk = nn.Sequential(
@@ -132,7 +134,18 @@ class CameraHead(nn.Module):
 
             # Apply trunk blocks with enable_ulysses_cp
             for block in self.trunk:
-                pose_tokens_modulated = block(pose_tokens_modulated, enable_ulysses_cp=self.enable_ulysses_cp)
+                if self.training and self.use_activation_checkpoint:
+                    pose_tokens_modulated = checkpoint(
+                        block,
+                        pose_tokens_modulated,
+                        enable_ulysses_cp=self.enable_ulysses_cp,
+                        use_reentrant=False,
+                    )
+                else:
+                    pose_tokens_modulated = block(
+                        pose_tokens_modulated,
+                        enable_ulysses_cp=self.enable_ulysses_cp,
+                    )
             # Compute the delta update for the pose encoding.
             pred_pose_enc_delta = self.pose_branch(self.trunk_norm(pose_tokens_modulated))
 
@@ -193,6 +206,7 @@ class CameraCausalHead(nn.Module):
         enable_3d_rope: bool = False,
         max_frame_num: int = 1024,
         rope_theta: float = 10000.0,
+        use_activation_checkpoint: bool = True,
     ):
         super().__init__()
 
@@ -208,6 +222,7 @@ class CameraCausalHead(nn.Module):
         self.sliding_window_size = sliding_window_size
         self.enable_ulysses_cp = enable_ulysses_cp
         self.num_heads = num_heads
+        self.use_activation_checkpoint = use_activation_checkpoint
 
         # 3D RoPE for temporal position encoding
         self.enable_3d_rope = enable_3d_rope
@@ -374,7 +389,64 @@ class CameraCausalHead(nn.Module):
             pose_tokens_modulated = pose_tokens_modulated + pose_tokens
 
             for idx in range(self.trunk_depth):
-                pose_tokens_modulated = self.trunk[idx](pose_tokens_modulated, pos=pos3d, video_mask=mask, num_frames=S*self.cp_size, frame_seqlen=1, kv_cache=self.kv_cache[i] if self.kv_cache is not None else None, global_idx=idx, num_frame_per_block=num_frame_per_block, num_frame_for_scale=num_frame_for_scale, sliding_window_size=sliding_window_size, enable_ulysses_cp=self.enable_ulysses_cp, enable_3d_rope=self.enable_3d_rope, is_scale_frames=is_scale_frames)
+                block_cache = self.kv_cache[i] if self.kv_cache is not None else None
+                block = self.trunk[idx]
+                use_ckpt = (
+                    self.training
+                    and self.use_activation_checkpoint
+                    and torch.is_grad_enabled()
+                    and pose_tokens_modulated.requires_grad
+                )
+                if use_ckpt:
+                    cache_keys = (
+                        f"k_{idx}", f"v_{idx}",
+                        f"k_{idx}_special", f"v_{idx}_special",
+                        "_skip_append",
+                    )
+                    pre_state = (
+                        {key: block_cache.get(key) for key in cache_keys}
+                        if block_cache is not None else None
+                    )
+
+                    def _run(tok, _block=block, _cache=block_cache, _pre=pre_state, _idx=idx):
+                        if _cache is not None and _pre is not None:
+                            for key, value in _pre.items():
+                                _cache[key] = value
+                        return _block(
+                            tok,
+                            pos=pos3d,
+                            video_mask=mask,
+                            num_frames=S*self.cp_size,
+                            frame_seqlen=1,
+                            kv_cache=_cache,
+                            global_idx=_idx,
+                            num_frame_per_block=num_frame_per_block,
+                            num_frame_for_scale=num_frame_for_scale,
+                            sliding_window_size=sliding_window_size,
+                            enable_ulysses_cp=self.enable_ulysses_cp,
+                            enable_3d_rope=self.enable_3d_rope,
+                            is_scale_frames=is_scale_frames,
+                        )
+
+                    pose_tokens_modulated = checkpoint(
+                        _run, pose_tokens_modulated, use_reentrant=False
+                    )
+                else:
+                    pose_tokens_modulated = block(
+                        pose_tokens_modulated,
+                        pos=pos3d,
+                        video_mask=mask,
+                        num_frames=S*self.cp_size,
+                        frame_seqlen=1,
+                        kv_cache=block_cache,
+                        global_idx=idx,
+                        num_frame_per_block=num_frame_per_block,
+                        num_frame_for_scale=num_frame_for_scale,
+                        sliding_window_size=sliding_window_size,
+                        enable_ulysses_cp=self.enable_ulysses_cp,
+                        enable_3d_rope=self.enable_3d_rope,
+                        is_scale_frames=is_scale_frames,
+                    )
             # Compute the delta update for the pose encoding.
             pred_pose_enc_delta = self.pose_branch(self.trunk_norm(pose_tokens_modulated))
 

@@ -11,9 +11,17 @@ Usage:
 import argparse
 import contextlib
 import json
+import sys
+from pathlib import Path
 
 import numpy as np
 import torch
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_DIR = SCRIPT_DIR.parents[1]
+for path in (REPO_DIR, SCRIPT_DIR):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from lingbot_map.models.gct_stream import GCTStream
 

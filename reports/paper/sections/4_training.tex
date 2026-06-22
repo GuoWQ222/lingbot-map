@@ -1,0 +1,297 @@
+\section{Training \& Inference}
+\label{sec:training}
+
+Training a streaming 3D reconstruction model end-to-end on long sequences is
+challenging: pose errors in early frames propagate along the trajectory and
+destabilize the loss landscape, making direct optimization on hundreds of views
+impractical.
+To address this, we adopt a two-stage training curriculum.
+The first stage trains an offline base model on short, diverse multi-view data
+to establish robust geometric priors~(\cref{sec:base_training}).
+The second stage introduces our proposed Geometric Context Attention (GCA) and
+progressively scales to long sequences, transferring the base model's
+geometric foundations to the streaming setting~(\cref{sec:streaming_training}).
+We describe the training data curation in~\cref{sec:training_data} and
+the inference pipeline in~\cref{sec:inference_mode}.
+
+
+\subsection{Base Model Training}
+\label{sec:base_training}
+
+\paragraph{Model Initialization.}
+We initialize the ViT backbone from DINOv2~\cite{oquab2023dinov2} 
+with a patch size of 14 pixels, followed by 24 alternating blocks of
+frame attention and cross-frame attention, following the architecture
+of VGGT~\cite{wang2025vggt}.
+At this stage, we use standard global attention rather than GCA:
+since the training data includes both unordered multi-view collections and
+temporally ordered video sequences, global attention imposes no temporal
+structure and can fully exploit both data types.
+The number of input views per training sample is randomly sampled between
+2 and 24, matching the diverse scale of available datasets.
+
+\paragraph{Optimization.}
+We use AdamW with a base learning rate of $2 \times 10^{-4}$ and weight
+decay of 0.05.
+The learning rate follows a linear warmup from $10^{-8}$ to the base rate
+over the first 5\% of training, followed by cosine annealing back to
+$10^{-8}$ over the remaining 95\%.
+Training runs for 160K iterations.
+
+\paragraph{Data Augmentation.}
+Images are resized to a maximum dimension of 518 pixels.
+To improve robustness to appearance variation across datasets with diverse
+capture conditions, we apply aggressive photometric augmentation:
+random color jittering (brightness, contrast, saturation $\pm 0.5$;
+hue $\pm 0.1$) with probability 0.9, random grayscale conversion with
+probability 0.05, and random spatial rescaling in
+$[0.8\times, 1.2\times]$ with aspect ratios sampled from $[0.33, 1.0]$.
+Additionally, we apply \emph{co-jittering}---applying an identical color
+transform to all frames within a scene---with probability 0.3, and
+independent per-frame transforms otherwise.
+This encourages the model to rely on geometric cues rather than
+appearance shortcuts when frames share similar photometric
+characteristics, while the independent transforms build robustness to
+inter-frame appearance variation.
+
+\paragraph{Distributed Training.}
+Training requires approximately 21,500 GPU hours, using fully sharded data
+parallelism (FSDP) with gradient checkpointing and bfloat16 mixed precision
+to manage memory consumption.
+
+
+\subsection{Streaming Model Training}
+\label{sec:streaming_training}
+
+\paragraph{Initialization from Base Model.}
+We initialize the streaming model from the pretrained base model weights
+and replace global attention with GCA.
+Since the query, key, and value projections in GCA share the same
+parameterization as global attention, the pretrained weights transfer
+directly, providing a strong initialization that accelerates convergence.
+
+\paragraph{Optimization and Progressive Curriculum.}
+We train for 160K iterations with a base learning rate of
+$5 \times 10^{-4}$, using the same warmup and cosine annealing schedule
+as the first stage.
+To stabilize training on progressively longer sequences, we adopt a
+view curriculum: the number of training views increases linearly from 24
+to 320 over the course of training.
+The starting count of 24 views matches the maximum used in the base
+stage, and the upper limit of 320 is set by the GPU memory budget under
+context parallelism.
+Similarly, the local pose reference-window size $k$ of GCA is randomly sampled from 16 to 64
+during training, exposing the model to varying receptive fields and
+improving robustness at inference time when different window sizes may
+be used.
+
+\paragraph{Context Parallelism.}
+As the number of views grows, GPU memory becomes the primary bottleneck
+due to the quadratic cost of cross-frame attention.
+We employ the Ulysses~\cite{jacobs2023deepspeed} context-parallelism
+strategy with a parallelism dimension of 16, distributing different views
+across GPUs and computing attention via all-to-all collective
+communication.
+Our implementation builds on TorchTitan~\cite{liang2025torchtitan} and
+Magi Attention.
+Training requires approximately 15,360 GPU hours.
+
+\subsection{Training Data}
+\label{sec:training_data}
+
+\paragraph{Dataset Composition.}
+We curate a training corpus of 29 datasets covering indoor, outdoor,
+object-centric, synthetic, and real-world scenarios.
+The full list, together with data format, scene type, and per-stage
+sampling ratios, is given in~\cref{tab:dataset_composition}.
+At the coarsest level, the datasets fall into two categories:
+\emph{multi-view collections}, where frames are unordered and may lack
+temporal continuity, and \emph{video sequences}, where frames follow a
+continuous camera trajectory.
+This distinction drives the different sampling strategies used in each
+training stage.
+
+\paragraph{Stage 1: Diverse Short-Sequence Data.}
+The first stage aims to build general geometric priors from a broad
+distribution of scenes.
+We draw from all 29 datasets with roughly balanced sampling ratios.
+The multi-view collections include
+BlendedMVS~\cite{yao2020blendedmvs},
+HyperSim~\cite{roberts2021hypersim},
+MegaDepth~\cite{li2018megadepth},
+MVS Synth~\cite{huang2018deepmvs},
+GTA SFM~\cite{wang2020flow},
+CO3D~\cite{reizenstein2021common},
+Objaverse~\cite{deitke2023objaverse},
+and Texverse~\cite{zhang2025texverse}.
+The video datasets include
+Unreal4K~\cite{tosi2021smd},
+WildRGBD~\cite{xia2024rgbd},
+TartanAir~\cite{wang2020tartanair},
+TartanAirV2~\cite{wang2020tartanair},
+TartanAirGround~\cite{patel2025tartanground},
+PointOdyssey~\cite{zheng2023pointodyssey},
+VirtualKITTI~\cite{cabon2020virtual},
+Kubric~\cite{greff2022kubric},
+DL3DV~\cite{ling2024dl3dv},
+Replica~\cite{straub2019replica},
+SceneRGBD~\cite{McCormac:etal:ICCV2017},
+Mapfree~\cite{arnold2022map},
+Aria Synthetic Environments~\cite{pan2023aria},
+ADT~\cite{pan2023aria},
+ScanNet~\cite{dai2017scannet},
+ScanNet++~\cite{yeshwanth2023scannet++},
+MatrixCity~\cite{li2023matrixcity},
+MidAir~\cite{Fonder2019MidAir},
+and our internal game dataset.
+Each iteration samples 2 to 24 frames per scene, with a dynamic batch
+sampler that packs at most 48 images per GPU.
+Frame selection relies on a \emph{nearby sampler}: a reference frame is
+chosen at random, and the remaining frames are drawn from a spatial
+window around it, without enforcing any temporal order.
+This unordered sampling is well-suited to the mixed-modality data in
+this stage, where many datasets have no natural frame ordering.
+
+\paragraph{Stage 2: Long-Trajectory Video Data.}
+The second stage shifts the distribution toward long, temporally coherent
+sequences needed for streaming reconstruction.
+We significantly increase the sampling weights for datasets with
+extended trajectories and multi-scene coverage, including
+TartanAir~\cite{wang2020tartanair},
+TartanAirV2,
+TartanAirGround~\cite{patel2025tartanground},
+MidAir~\cite{Fonder2019MidAir},
+MatrixCity~\cite{li2023matrixcity},
+Waymo~\cite{sun2020scalability},
+VirtualKITTI~\cite{cabon2020virtual},
+KITTI-360~\cite{liao2022kitti},
+ScanNet++~\cite{yeshwanth2023scannet++},
+ScanNet~\cite{dai2017scannet},
+and our internal game datasets,
+while down-weighting or dropping multi-view-only datasets that lack
+temporal structure
+(see~\cref{tab:dataset_composition} for exact ratios).
+
+\paragraph{Foldback Video Sampler.}
+To produce temporally coherent training subsequences from long videos,
+we replace the spatial nearby sampler with a \emph{foldback video
+sampler}.
+The sampler starts at a random frame and advances with a random stride.
+Upon reaching a sequence boundary, it reverses direction and draws a new
+stride (distinct from the previous one) to avoid degenerate oscillation.
+This mechanism yields subsequences with naturally varying frame rates
+and no forward-time bias, providing the model with diverse temporal
+contexts during training.
+
+\begin{table}[t]
+\centering
+\caption{Dataset composition, data format, scene type, and sampling proportions across the two training stages. Blank entries indicate that the dataset was not used in that stage.}
+\label{tab:dataset_composition}
+\begin{tabular}{llc | cc}
+\toprule
+Dataset & Format & Scene Type & Stage 1 Ratio (\%) & Stage 2 Ratio (\%) \\
+\midrule
+BlendedMVS~\cite{yao2020blendedmvs}     & Multi-view & Single & 1.1  & 1.9  \\
+HyperSim~\cite{roberts2021hypersim}       & Multi-view & Single & 5.8  & 5.7  \\
+MegaDepth~\cite{li2018megadepth}      & Multi-view & Multi  & 3.9  & -    \\
+Unreal4K~\cite{tosi2021smd}       & Video      & Single & 1.0  & 0.9  \\
+WildRGBD~\cite{xia2024rgbd}       & Video      & Single & 5.8  & 1.9  \\
+TartanAir~\cite{wang2020tartanair}      & Video      & Multi  & 3.9  & 7.6  \\
+TartanAirV2~\cite{wang2020tartanair}    & Video      & Multi  & 5.8  & 10.8 \\
+TartanGround~\cite{patel2025tartanground} & Video     & Multi  & 5.8  & 10.8 \\
+Waymo~\cite{sun2020scalability}        & Video      & Multi  & -    & 0.9  \\
+PointOdyssey~\cite{zheng2023pointodyssey}   & Video      & Single & 0.3  & 0.9  \\
+VirtualKITTI~\cite{cabon2020virtual}  & Video      & Multi  & 0.8  & 1.9  \\
+Kubric~\cite{greff2022kubric}         & Video      & Single & 0.3  & 0.9  \\
+DL3DV~\cite{ling2024dl3dv}          & Video      & Multi  & 11.0 & 5.7  \\
+MVS-Synth~\cite{huang2018deepmvs}      & Multi-view & Single & 1.7  & -    \\
+GTA-SFM~\cite{wang2020flow}      & Multi-view & Single & 1.7  & -    \\
+CO3D~\cite{reizenstein2021common}          & Multi-view & Single & 5.5  & -    \\
+SceneRGBD~\cite{McCormac:etal:ICCV2017}     & Video      & Single & 7.3  & 5.7  \\
+Mapfree~\cite{arnold2022map}       & Video      & Multi  & 3.9  & 1.5  \\
+Aria Synthetic~\cite{pan2023aria} & Video      & Single & 7.3  & 5.7  \\
+ADT~\cite{pan2023aria}            & Video      & Single & 1.0  & -    \\
+Objaverse~\cite{deitke2023objaverse}      & Mesh & Single & 2.7  & -    \\
+Texverse~\cite{zhang2025texverse}       & Mesh & Single & 2.7  & -    \\
+ScanNet++~\cite{yeshwanth2023scannet++}      & Video      & Single & 3.9  & 2.8  \\
+ScanNet~\cite{dai2017scannet}        & Video      & Single & 1.9  & 2.8  \\
+MatrixCity~\cite{li2023matrixcity}     & Video      & Multi  & 1.7  & 7.6  \\
+MidAir~\cite{Fonder2019MidAir}         & Video      & Multi  & 2.9  & 5.7  \\
+KITTI-360~\cite{liao2022kitti}      & Video      & Multi  & -    & 3.8  \\
+Internal Game  & Video      & Multi  & 10.6 & 10.8 \\
+Gibson~\cite{xia2018gibson}  & Mesh      & Multi  & - & 2.6 \\
+Matterport3D~\cite{chang2017matterport3d}  & Mesh      & Multi  & - & 2.6 \\
+HM3D~\cite{ramakrishnan2021hm3d}  & Mesh      & Multi  & - & 2.6 \\
+\bottomrule
+\end{tabular}%
+\end{table}
+
+\subsection{Inference Modes}
+\label{sec:inference_mode}
+
+\method supports two inference modes, Direct Output and Visual
+Odometry (VO), that share a common keyframe selection mechanism.
+
+\paragraph{Keyframe Selection.}
+When the input sequence exceeds the maximum training length, we
+employ an adaptive keyframe selection strategy to control KV-cache
+growth.
+For each incoming frame, the model first estimates its depth map and
+camera pose, then computes the optical flow relative to the most
+recent keyframe using the predicted pose and depth.
+If the flow magnitude exceeds a predefined threshold, the frame is
+designated as a new keyframe, whose features are appended to the
+KV cache; otherwise, it is discarded.
+This mechanism is shared by both inference modes.
+
+\paragraph{Direct Output Mode.}
+Direct mode is the default inference setting.
+The model processes frames causally through GCA, with the full
+three-level context (anchor, trajectory memory, and local window)
+accumulating continuously without reset.
+Each frame directly outputs an absolute camera pose and a dense
+depth map.
+In this mode, prediction errors accumulate solely from the model's
+frame-by-frame inference, without introducing any additional error
+from external alignment steps.
+Although the model is trained on sequences of up to 320 views, we
+empirically find that the Direct mode with keyframe selection remains
+stable for approximately $10\times$ the training length
+(${\sim}3{,}000$ frames), beyond which prediction quality gradually
+degrades.
+
+\paragraph{Visual Odometry (VO) Mode.}
+For sequences that far exceed the Direct mode's effective range
+(e.g., tens of thousands of frames), we switch to VO mode.
+The input is partitioned into overlapping local windows.
+Within each window, an initial subset of frames is processed jointly
+to establish a robust local scale and coordinate system, and the
+remaining frames are processed causally via GCA with keyframe
+selection.
+At the end of each window, the model state is reset.
+To fuse successive windows into a single global trajectory, we
+compute a Sim(3) alignment between the overlapping regions of
+consecutive windows, recovering the relative scale, rotation, and
+translation.
+This enables \method to process arbitrarily long sequences with
+bounded memory, at the cost of additional drift introduced at each
+window boundary: unlike Direct mode, VO mode incurs extra alignment
+error that compounds with the number of windows.
+
+\paragraph{Trade-offs.}
+Direct mode produces more accurate trajectories by avoiding
+inter-window alignment error, and is the preferred choice when the
+sequence length stays within ${\sim}3{,}000$ frames.
+For inputs that substantially exceed this range, VO mode generalizes
+more effectively at the cost of accumulated alignment drift at the 
+window boundaries.
+In practice, the choice is determined by the sequence length and the
+required level of global consistency.
+
+\paragraph{Default Inference Configuration.}
+Unless otherwise specified, all experiments in this report use Direct
+Output Mode with a local pose-reference window size $k=64$ and
+keyframe interval $m=1$, at a resolution of $518 \times 378$ with
+bfloat16 precision.
+For the large-scale demo videos that span city-scale environments
+or extremely long sequences, we use VO mode.

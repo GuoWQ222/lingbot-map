@@ -1,0 +1,130 @@
+\documentclass[onecolumn]{robbyant}
+
+\metadata[Website]{\url{https://technology.robbyant.com/lingbot-map}}
+\metadata[Github]{\url{https://github.com/robbyant/lingbot-map}}
+
+\newcommand\methodname{LingBot-Map}
+\newcommand{\MethodName}{LingBot-Map\xspace}
+\newcommand{\method}{\texttt{\methodname}\xspace}
+
+\usepackage{overpic}
+\usepackage{fontawesome}
+\usepackage{bbding}
+\usepackage{wasysym}
+\usepackage{utfsym}
+\usepackage{arydshln}
+\usepackage{colortbl}
+\usepackage{gensymb}
+\usepackage{appendix}
+\usepackage{makecell}
+\usepackage{tikz}
+\usepackage{float}
+\usetikzlibrary{tikzmark, calc}
+
+\algtext*{EndWhile}
+\algtext*{EndFor}
+\algtext*{EndIf}
+\algtext*{EndFunction}
+\algtext*{EndProcedure}
+\renewcommand{\algorithmicrequire}{\textbf{Input:}}
+\renewcommand{\algorithmicensure}{\textbf{Output:}}
+
+\definecolor{tabfirst}{rgb}{1, 0.7, 0.7}
+\definecolor{tabsecond}{rgb}{1, 0.85, 0.7}
+\definecolor{tabthird}{rgb}{1, 1, 0.7}
+\definecolor{tabgray}{rgb}{0.9, 0.9, 0.9}
+\definecolor{MyDarkRed}{rgb}{0.66, 0.16, 0.16}
+\definecolor{MyDarkBlue}{rgb}{0.16, 0.16, 0.66}
+
+\newcommand{\figref}[1]{Fig.~\ref{#1}}
+\newcommand{\tabref}[1]{Tab.~\ref{#1}}
+\newcommand{\secref}[1]{Sec.~\ref{#1}}
+\providecommand{\algref}[1]{Algorithm~\ref{#1}}
+\newcommand{\equref}[1]{Equ. (\ref{#1})}
+\newcommand{\Tref}[1]{Table~\ref{#1}}
+\newcommand{\eref}[1]{Eq.~\eqref{#1}}
+\newcommand{\Eref}[1]{Equation~\eqref{#1}}
+\newcommand{\fref}[1]{Fig.~\ref{#1}}
+\newcommand{\Fref}[1]{Figure~\ref{#1}}
+\newcommand{\sref}[1]{Sec.~\ref{#1}}
+\newcommand{\Sref}[1]{Section~\ref{#1}}
+\newcommand{\myPara}[1]{\paragraph{#1}}
+
+\makeatletter
+\DeclareRobustCommand\onedot{\futurelet\@let@token\@onedot}
+\def\@onedot{\ifx\@let@token.\else.\null\fi\xspace}
+\def\eg{\emph{e.g}\onedot} \def\Eg{\emph{E.g}\onedot}
+\def\ie{\emph{i.e}\onedot} \def\Ie{\emph{I.e}\onedot}
+\def\cf{\emph{cf}\onedot} \def\Cf{\emph{Cf}\onedot}
+\def\etc{\emph{etc}\onedot} \def\vs{\emph{vs}\onedot}
+\def\wrt{w.r.t\onedot} \def\dof{d.o.f\onedot}
+\def\iid{i.i.d\onedot} \def\wolog{w.l.o.g\onedot}
+\def\etal{\emph{et al}\onedot}
+\makeatother
+
+\newcommand{\clz}[1]{{\textcolor{green}{#1}}}
+\newcommand{\gj}[1]{{\textcolor{pink}{#1}}}
+\newcommand{\yh}[1]{{\textcolor{blue}{#1}}}
+\newcommand{\yy}[1]{{\textcolor{red}{#1}}}
+\newcommand{\gy}[1]{\textcolor{magenta}{{[GY: #1]}}}
+\newcommand{\jianyuan}[1]{{\color{blue}[\textbf{Jianyuan:} #1]}\xspace}
+\newcommand{\my}[1]{{\color{red} [Mingyu: #1]}}
+
+\newcommand{\correct}[1]{\textcolor{MyDarkBlue}{#1 \checkmark}}
+\newcommand{\wrong}[1]{\textcolor{MyDarkRed}{#1 $\times$}}
+\newcommand{\PAR}[1]{\vskip4pt \noindent{\bf #1~}}
+\newcommand{\dummycolor}{lightgray}
+
+\title{Geometric Context Transformer  for \\[6pt] Streaming 3D Reconstruction}
+
+\author{
+\begin{center}
+    Lin-Zhuo Chen$^{*}$ \quad
+    Jian Gao$^{*}$ \quad
+    Yihang Chen \quad
+    Ka Leong Cheng \quad
+    Yipengjing Sun \quad 
+    Liangxiao Hu \quad
+    \\ [6pt]
+    Nan Xue \quad
+    Xing Zhu \quad
+    Yujun Shen \quad
+    Yao Yao$^{\dagger}$ \quad
+    Yinghao Xu$^{\dagger \ddagger}$
+    \\[12pt]
+    $^{*}$Equal Contribution \qquad
+    $^{\dagger}$Corresponding Author \qquad
+    $^{\ddagger}$Project Lead
+\end{center}
+}
+
+\begin{document}
+
+\input{sections/0_abstract.tex}
+
+\maketitle
+
+
+\begin{figure}[h]
+  \centering
+  \begin{overpic}[width=1.\columnwidth, trim={0 0 0 0}, clip]{./radar.pdf}
+	\end{overpic}
+  \caption{\textbf{Comparison of \method with State-of-the-Art streaming reconstruction methods.}}
+
+  \label{fig:teasor}
+\end{figure}
+
+\justifying
+
+
+\input{sections/1_introduction.tex}
+\input{sections/2_related_work.tex}
+\input{sections/3_method.tex}
+\input{sections/4_training.tex}
+\input{sections/5_benchmark.tex}
+\input{sections/6_experiments.tex}
+\input{sections/7_conclusion.tex}
+\input{sections/8_reference.tex}
+\input{sections/9_appendix.tex}
+
+\end{document}

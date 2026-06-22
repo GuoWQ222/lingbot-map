@@ -21,16 +21,23 @@ from lingbot_map.utils.geometry import closed_form_inverse_se3, closed_form_inve
 def extri_intri_to_pose_encoding(
     extrinsics, intrinsics, image_size_hw=None, pose_encoding_type="absT_quaR_FoV"  # e.g., (256, 512)
 ):
-    """Convert camera extrinsics and intrinsics to a compact pose encoding.
+    """Convert camera-to-world extrinsics and intrinsics to pose encoding.
 
-    This function transforms camera parameters into a unified pose encoding format,
-    which can be used for various downstream tasks like pose prediction or representation.
+    The LingBot-MAP camera head predicts poses in the OpenCV camera coordinate
+    convention (x-right, y-down, z-forward), but the transform stored in
+    ``pose_encoding`` is camera-to-world (c2w). Its translation is the camera
+    center in the current world/canonical coordinate frame.
+
+    Note that dataloader batches use ``batch["extrinsics"]`` for OpenCV
+    world-to-camera (w2c) matrices so depth can be unprojected by inverting
+    them. Convert those batch extrinsics with ``train.w2c_to_c2w_extrinsics``
+    before calling this function.
 
     Args:
-        extrinsics (torch.Tensor): Camera extrinsic parameters with shape BxSx3x4,
-            where B is batch size and S is sequence length.
-            In OpenCV coordinate system (x-right, y-down, z-forward), representing camera from world transformation.
-            The format is [R|t] where R is a 3x3 rotation matrix and t is a 3x1 translation vector.
+        extrinsics (torch.Tensor): Camera-to-world (c2w) extrinsic parameters
+            with shape BxSx3x4, where B is batch size and S is sequence length.
+            The format is [R|t], with R rotating camera coordinates into the
+            world frame and t equal to the camera center in world coordinates.
         intrinsics (torch.Tensor): Camera intrinsic parameters with shape BxSx3x3.
             Defined in pixels, with format:
             [[fx, 0, cx],
@@ -50,7 +57,7 @@ def extri_intri_to_pose_encoding(
             - [7:] = field of view (2D)
     """
 
-    # extrinsics: BxSx3x4
+    # extrinsics: BxSx3x4 c2w
     # intrinsics: BxSx3x3
 
     if pose_encoding_type == "absT_quaR_FoV":
@@ -72,10 +79,12 @@ def extri_intri_to_pose_encoding(
 def pose_encoding_to_extri_intri(
     pose_encoding, image_size_hw=None, pose_encoding_type="absT_quaR_FoV", build_intrinsics=True  # e.g., (256, 512)
 ):
-    """Convert a pose encoding back to camera extrinsics and intrinsics.
+    """Convert pose encoding back to c2w extrinsics and intrinsics.
 
     This function performs the inverse operation of extri_intri_to_pose_encoding,
-    reconstructing the full camera parameters from the compact encoding.
+    reconstructing camera-to-world (c2w) extrinsics for model-predicted camera
+    poses. Dataloader ``batch["extrinsics"]`` remains w2c and should not be
+    compared to this output without inversion.
 
     Args:
         pose_encoding (torch.Tensor): Encoded camera pose parameters with shape BxSx9,
@@ -94,10 +103,10 @@ def pose_encoding_to_extri_intri(
 
     Returns:
         tuple: (extrinsics, intrinsics)
-            - extrinsics (torch.Tensor): Camera extrinsic parameters with shape BxSx3x4.
-              In OpenCV coordinate system (x-right, y-down, z-forward), representing camera from world
-              transformation. The format is [R|t] where R is a 3x3 rotation matrix and t is
-              a 3x1 translation vector.
+            - extrinsics (torch.Tensor): Camera-to-world (c2w) extrinsic
+              parameters with shape BxSx3x4 in the OpenCV camera convention
+              (x-right, y-down, z-forward). The format is [R|t], where R maps
+              camera coordinates into the world frame and t is the camera center.
             - intrinsics (torch.Tensor or None): Camera intrinsic parameters with shape BxSx3x3,
               or None if build_intrinsics is False. Defined in pixels, with format:
               [[fx, 0, cx],
